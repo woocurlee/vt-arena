@@ -1,0 +1,6 @@
+spring:
+  application:
+    name: vt-arena
+  threads:
+    virtual:
+      enabled: true
