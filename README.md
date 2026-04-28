@@ -1,188 +1,69 @@
 # Virtual Thread vs Coroutine 벤치마크
 
-VT Arena : Virtual Thread Arena
+VT-Arena : Virtual Thread Arena
 
-> Spring Boot 3.2+ 환경에서 Virtual Thread와 Kotlin Coroutine의 성능을 직접 비교하는 3시간짜리 실습 가이드
-
----
-
-## 타임라인
-
-| 시간 | 단계 | 내용 |
-|------|------|------|
-| 0:00 ~ 0:30 | 프로젝트 세팅 | Spring Boot 프로젝트 생성, 의존성 구성 |
-| 0:30 ~ 1:15 | API 구현 | Virtual Thread / Coroutine 엔드포인트 각각 구현 |
-| 1:15 ~ 2:00 | 부하 테스트 | k6로 단계별 동시 요청 테스트 |
-| 2:00 ~ 2:30 | 비교 분석 | 응답시간, TPS, 스레드 수, 메모리 비교 |
-| 2:30 ~ 3:00 | 추가 실험 | Virtual Thread pinning 이슈 확인 |
+> Spring Boot 3.2+ 환경에서 Virtual Thread와 Kotlin Coroutine의 성능을 직접 비교하는 3시간 실습
 
 ---
 
-## 1. 프로젝트 세팅
+## 1. 프로젝트 세팅 (0:00 ~ 0:30)
 
-### 의존성 (build.gradle.kts)
+- [ ] Spring Boot 3.2+ / Java 21 / Kotlin 프로젝트 생성
+- [ ] 의존성 추가: spring-web, spring-webflux, kotlinx-coroutines-core, kotlinx-coroutines-reactor
+- [ ] application.yml에서 Virtual Thread 활성화 옵션 설정
+- [ ] 앱 기동 확인
 
-```kotlin
-dependencies {
-    // MVC + Virtual Thread
-    implementation("org.springframework.boot:spring-boot-starter-web")
-
-    // WebFlux + Coroutine
-    implementation("org.springframework.boot:spring-boot-starter-webflux")
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core")
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-reactor")
-}
-```
-
-### Virtual Thread 활성화 (application.yml)
-
-```yaml
-spring:
-  threads:
-    virtual:
-      enabled: true
-```
-
-> Spring Boot 3.2+ 필수. Java 21 이상 필요.
+💡 **포인트**: MVC(web)와 WebFlux(webflux)를 동시에 쓸 때 어떤 서버가 뜨는지 확인해볼 것. 기본 동작이 예상과 다를 수 있음.
 
 ---
 
-## 2. API 구현
+## 2. API 구현 (0:30 ~ 1:15)
 
 ### 시나리오
 
-외부 API 호출(200ms) + DB 조회(100ms)를 시뮬레이션하는 동일한 로직을 두 가지 방식으로 구현한다.
+외부 API 호출(200ms) + DB 조회(100ms)를 시뮬레이션하는 동일 로직을 두 방식으로 구현.
 
 ### Virtual Thread (MVC)
 
-```kotlin
-@RestController
-@RequestMapping("/api/virtual-thread")
-class VirtualThreadController {
-
-    @GetMapping
-    fun handle(): Map<String, Any> {
-        // 외부 API 호출 시뮬레이션
-        Thread.sleep(200)
-        // DB 조회 시뮬레이션
-        Thread.sleep(100)
-
-        return mapOf(
-            "handler" to "virtual-thread",
-            "thread" to Thread.currentThread().toString(),
-            "timestamp" to System.currentTimeMillis()
-        )
-    }
-}
-```
+- [ ] `/api/virtual-thread` 엔드포인트 생성
+- [ ] blocking 방식으로 지연 구현 (`Thread.sleep`)
+- [ ] 응답에 현재 스레드 정보 포함 → 나중에 Virtual Thread인지 확인용
 
 ### Coroutine (WebFlux)
 
-```kotlin
-@RestController
-@RequestMapping("/api/coroutine")
-class CoroutineController {
+- [ ] `/api/coroutine` 엔드포인트 생성 (suspend fun)
+- [ ] non-blocking 방식으로 지연 구현 (`delay`)
+- [ ] 동일하게 스레드 정보 포함
 
-    @GetMapping
-    suspend fun handle(): Map<String, Any> {
-        // 외부 API 호출 시뮬레이션
-        delay(200)
-        // DB 조회 시뮬레이션
-        delay(100)
-
-        return mapOf(
-            "handler" to "coroutine",
-            "thread" to Thread.currentThread().toString(),
-            "timestamp" to System.currentTimeMillis()
-        )
-    }
-}
-```
-
-> **핵심 차이**: `Thread.sleep()`은 blocking이지만 Virtual Thread에서는 자동으로 yield됨. `delay()`는 non-blocking suspend.
+💡 **포인트**: `Thread.sleep` vs `delay`의 차이가 핵심. 하나는 스레드를 blocking하고, 하나는 suspend한다. 응답의 스레드 이름을 보면 차이가 보임.
 
 ---
 
-## 3. 부하 테스트 (k6)
+## 3. 부하 테스트 (1:15 ~ 2:00)
 
-### 설치
+- [ ] k6 설치 (`brew install k6`)
+- [ ] 테스트 스크립트 작성 — stages로 VU를 100 → 500 → 1000 단계별 ramp-up
+- [ ] Virtual Thread 엔드포인트 테스트 실행
+- [ ] Coroutine 엔드포인트 테스트 실행 (동일 스크립트, URL만 변경)
+- [ ] 각 결과의 평균/p95/p99/TPS 기록
 
-```bash
-brew install k6
-```
-
-### 테스트 스크립트
-
-```javascript
-// virtual-thread-test.js
-import http from 'k6/http';
-import { sleep } from 'k6';
-
-export const options = {
-  stages: [
-    { duration: '10s', target: 100 },   // ramp-up to 100
-    { duration: '20s', target: 100 },   // hold 100
-    { duration: '10s', target: 500 },   // ramp-up to 500
-    { duration: '20s', target: 500 },   // hold 500
-    { duration: '10s', target: 1000 },  // ramp-up to 1000
-    { duration: '20s', target: 1000 },  // hold 1000
-    { duration: '10s', target: 0 },     // ramp-down
-  ],
-};
-
-export default function () {
-  http.get('http://localhost:8080/api/virtual-thread');
-  sleep(0.1);
-}
-```
-
-```javascript
-// coroutine-test.js — 동일 구조, URL만 변경
-// http.get('http://localhost:8080/api/coroutine');
-```
-
-### 실행
-
-```bash
-# Virtual Thread 테스트
-k6 run virtual-thread-test.js
-
-# Coroutine 테스트
-k6 run coroutine-test.js
-```
-
-### 측정 항목
-
-- `http_req_duration` → 평균, p95, p99 응답시간
-- `http_reqs` → 총 요청 수 / TPS
-- `iterations` → 완료된 반복 수
+💡 **포인트**: 두 테스트 사이에 앱을 재시작해서 JVM 상태를 초기화할 것. 안 하면 GC 영향으로 결과가 왜곡될 수 있음.
 
 ---
 
 ## 4. JVM 모니터링
 
-테스트 중 별도 터미널에서 스레드 수를 추적한다.
+테스트 중 별도 터미널에서 확인할 것들:
 
-```bash
-# PID 확인
-jps
+- [ ] `jps`로 PID 확인
+- [ ] `jcmd`로 스레드 수 실시간 추적
+- [ ] VisualVM 또는 JConsole로 힙 메모리, 라이브 스레드 수 모니터링
 
-# 스레드 수 실시간 모니터링
-watch -n 1 "jcmd <PID> Thread.print | grep -c 'Virtual'"
-
-# 또는 간단하게
-watch -n 1 "jcmd <PID> Thread.print | wc -l"
-```
-
-### VisualVM 사용 시
-
-- 힙 메모리 사용량
-- 라이브 스레드 수 변화 추이
-- GC 활동
+💡 **포인트**: Virtual Thread는 스레드 수가 수천 개까지 올라가도 메모리를 거의 안 먹음. 반면 Coroutine은 스레드 수 자체가 적게 유지됨. 이 차이를 눈으로 확인.
 
 ---
 
-## 5. 비교 분석 템플릿
+## 5. 비교 분석 (2:00 ~ 2:30)
 
 | 항목 | Virtual Thread | Coroutine |
 |------|---------------|-----------|
@@ -194,53 +75,27 @@ watch -n 1 "jcmd <PID> Thread.print | wc -l"
 | 최대 스레드 수 | | |
 | 힙 메모리 피크 | | |
 
----
-
-## 6. 추가 실험 — Pinning 이슈
-
-Virtual Thread에서 `synchronized` 블록을 사용하면 carrier thread에 고정(pinning)되어 성능이 저하된다.
-
-### Pinning 발생 코드
-
-```kotlin
-@GetMapping("/pinning")
-fun handleWithPinning(): Map<String, Any> {
-    synchronized(this) {
-        Thread.sleep(200)
-    }
-    Thread.sleep(100)
-    return mapOf("handler" to "pinning")
-}
-```
-
-### Pinning 해결 — ReentrantLock
-
-```kotlin
-private val lock = ReentrantLock()
-
-@GetMapping("/no-pinning")
-fun handleWithoutPinning(): Map<String, Any> {
-    lock.withLock {
-        Thread.sleep(200)
-    }
-    Thread.sleep(100)
-    return mapOf("handler" to "no-pinning")
-}
-```
-
-### Pinning 감지 JVM 옵션
-
-```bash
-java -Djdk.tracePinnedThreads=short -jar app.jar
-```
-
-> pinning 발생 시 콘솔에 스택 트레이스가 출력된다.
+스스로 답해볼 질문:
+- 동시성이 올라갈수록 어느 쪽이 더 안정적인가?
+- 스레드 수와 메모리 사용량은 어떤 관계인가?
+- 실무에서 어떤 상황에 어떤 모델을 선택할 것인가?
 
 ---
 
-## 핵심 포인트
+## 6. 추가 실험 — Pinning (2:30 ~ 3:00)
 
-- Virtual Thread는 기존 blocking 코드를 그대로 활용할 수 있어 마이그레이션 비용이 낮다
-- Coroutine은 진짜 non-blocking이라 IO 스레드를 점유하지 않는다
-- 동시 접속이 높아질수록 차이가 드러난다 — 직접 확인해보자
-- 실무에서 `synchronized`, JDBC 드라이버 등에서 pinning이 발생할 수 있으니 반드시 체크
+- [ ] Virtual Thread 엔드포인트에 `synchronized` 블록으로 감싼 sleep 추가
+- [ ] 부하 걸어서 성능 저하 확인
+- [ ] `ReentrantLock`으로 교체 후 동일 테스트
+- [ ] JVM 옵션 `-Djdk.tracePinnedThreads=short`로 pinning 로그 확인
+
+💡 **포인트**: 실무에서 JDBC 드라이버, 라이브러리 내부에 `synchronized`가 숨어있는 경우가 많음. pinning이 성능을 얼마나 깎는지 체감해두면 나중에 트러블슈팅할 때 바로 떠오름.
+
+---
+
+## 삽질 예상 포인트
+
+- MVC + WebFlux 동시 의존성 시 서버 타입 충돌
+- Virtual Thread 활성화 안 되어 있으면 일반 platform thread로 동작 → 스레드 이름으로 꼭 확인
+- k6 stages에서 VU가 너무 빠르게 올라가면 connection refused 발생 가능 → ramp-up 구간 여유 두기
+- Coroutine 엔드포인트에서 실수로 `Thread.sleep` 쓰면 의미 없어짐
